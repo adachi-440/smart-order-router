@@ -6,6 +6,10 @@ import { ParserOutput } from '@oclif/parser/lib/parse';
 import DEFAULT_TOKEN_LIST from '@uniswap/default-token-list';
 import { ChainId, Currency, CurrencyAmount, Token } from '@uniswap/sdk-core';
 import { MethodParameters } from '@uniswap/v3-sdk';
+import { Pool as V3Pool } from '@uniswap/v3-sdk';
+import { Pool as V4Pool } from '@uniswap/v4-sdk';
+import { Pair } from '@uniswap/v2-sdk';
+import { Protocol } from '@uniswap/router-sdk';
 import bunyan, { default as Logger } from 'bunyan';
 import bunyanDebugStream from 'bunyan-debug-stream';
 import _ from 'lodash';
@@ -46,8 +50,14 @@ import {
   V2PoolProvider,
   V3PoolProvider,
   V3RouteWithValidQuote,
-  V4PoolProvider
+  V4PoolProvider,
+  V4Route,
+  V4RouteWithValidQuote,
+  V3Route,
+  V2Route,
+  MixedRoute
 } from '../src';
+import { V3_CORE_FACTORY_ADDRESSES } from '../src/util/addresses';
 import {
   LegacyGasPriceProvider
 } from '../src/providers/legacy-gas-price-provider';
@@ -379,7 +389,113 @@ export abstract class BaseCommand extends Command {
     gasPriceWei: BigNumber,
     simulationStatus?: SimulationStatus,
   ) {
-    this.logger.info(`Best Route:`);
+    
+    // Enhanced route details logging for all routes
+    routeAmounts.forEach((routeAmount, routeIndex) => {
+      this.logger.info(`\n--- Route ${routeIndex + 1} (${routeAmount.protocol}) ---`);
+      this.logger.info(`  Percentage: ${routeAmount.percent.toFixed(2)}%`);
+      this.logger.info(`  Amount: ${routeAmount.amount.toFixed(6)}`);
+      this.logger.info(`  Quote: ${routeAmount.quote.toFixed(6)}`);
+      this.logger.info(`  Gas Estimate: ${routeAmount.gasEstimate.toString()}`);
+      
+      const route = routeAmount.route;
+      
+      if (routeAmount.protocol === Protocol.V4) {
+        const v4Route = route as V4Route;
+        this.logger.info(`  Token Path: ${v4Route.currencyPath.map(token => token.symbol || 'Unknown').join(' → ')}`);
+        this.logger.info(`  Pools (${v4Route.pools.length}):`);
+        
+        v4Route.pools.forEach((pool, poolIndex) => {
+          this.logger.info(`    Pool ${poolIndex + 1}:`);
+          const token0Address = pool.token0.isToken ? pool.token0.address : pool.token0.name;
+          const token1Address = pool.token1.isToken ? pool.token1.address : pool.token1.name;
+          this.logger.info(`      Token0: ${pool.token0.symbol || 'Unknown'} (${token0Address})`);
+          this.logger.info(`      Token1: ${pool.token1.symbol || 'Unknown'} (${token1Address})`);
+          this.logger.info(`      Fee: ${pool.fee / 10000}%`);
+          this.logger.info(`      Tick Spacing: ${pool.tickSpacing}`);
+          this.logger.info(`      Hooks: ${pool.hooks}`);
+          if (pool.poolKey) {
+            this.logger.info(`      Pool Key: ${JSON.stringify(pool.poolKey)}`);
+          }
+          this.logger.info(`      Liquidity: ${pool.liquidity.toString()}`);
+          this.logger.info(`      Sqrt Price: ${pool.sqrtRatioX96.toString()}`);
+          this.logger.info(`      Tick: ${pool.tickCurrent}`);
+        });
+        
+        if ('initializedTicksCrossedList' in routeAmount) {
+          const v4RouteWithValidQuote = routeAmount as V4RouteWithValidQuote;
+          const ticksCrossed = v4RouteWithValidQuote.initializedTicksCrossedList || [];
+          const sqrtPricesAfter = v4RouteWithValidQuote.sqrtPriceX96AfterList || [];
+          this.logger.info(`  Initialized Ticks Crossed: [${ticksCrossed.filter(t => t !== undefined && t !== null).join(', ')}]`);
+          this.logger.info(`  Sqrt Price After: [${sqrtPricesAfter.filter(p => p !== undefined && p !== null).map(p => p.toString()).join(', ')}]`);
+        }
+      } else if (routeAmount.protocol === Protocol.V3) {
+        const v3Route = route as V3Route;
+        this.logger.info(`  Token Path: ${v3Route.tokenPath.map(token => token.symbol).join(' → ')}`);
+        this.logger.info(`  Pools (${v3Route.pools.length}):`);
+        
+        v3Route.pools.forEach((pool, poolIndex) => {
+          this.logger.info(`    Pool ${poolIndex + 1}:`);
+          this.logger.info(`      Token0: ${pool.token0.symbol} (${pool.token0.address})`);
+          this.logger.info(`      Token1: ${pool.token1.symbol} (${pool.token1.address})`);
+          this.logger.info(`      Fee: ${pool.fee / 10000}%`);
+          const poolAddress = V3Pool.getAddress(pool.token0, pool.token1, pool.fee, undefined, V3_CORE_FACTORY_ADDRESSES[pool.chainId]);
+          this.logger.info(`      Pool Address: ${poolAddress}`);
+          this.logger.info(`      Liquidity: ${pool.liquidity.toString()}`);
+          this.logger.info(`      Sqrt Price: ${pool.sqrtRatioX96.toString()}`);
+          this.logger.info(`      Tick: ${pool.tickCurrent}`);
+        });
+        
+        if ('initializedTicksCrossedList' in routeAmount) {
+          const v3RouteWithValidQuote = routeAmount as V3RouteWithValidQuote;
+          const ticksCrossed = v3RouteWithValidQuote.initializedTicksCrossedList || [];
+          const sqrtPricesAfter = v3RouteWithValidQuote.sqrtPriceX96AfterList || [];
+          this.logger.info(`  Initialized Ticks Crossed: [${ticksCrossed.filter(t => t !== undefined && t !== null).join(', ')}]`);
+          this.logger.info(`  Sqrt Price After: [${sqrtPricesAfter.filter(p => p !== undefined && p !== null).map(p => p.toString()).join(', ')}]`);
+        }
+      } else if (routeAmount.protocol === Protocol.V2) {
+        const v2Route = route as V2Route;
+        this.logger.info(`  Token Path: ${v2Route.path.map(token => token.symbol).join(' → ')}`);
+        this.logger.info(`  Pairs (${v2Route.pairs.length}):`);
+        
+        v2Route.pairs.forEach((pair, pairIndex) => {
+          this.logger.info(`    Pair ${pairIndex + 1}:`);
+          this.logger.info(`      Token0: ${pair.token0.symbol} (${pair.token0.address})`);
+          this.logger.info(`      Token1: ${pair.token1.symbol} (${pair.token1.address})`);
+          this.logger.info(`      Reserve0: ${pair.reserve0.toFixed(6)}`);
+          this.logger.info(`      Reserve1: ${pair.reserve1.toFixed(6)}`);
+        });
+      } else if (routeAmount.protocol === Protocol.MIXED) {
+        const mixedRoute = route as MixedRoute;
+        this.logger.info(`  Token Path: ${mixedRoute.path.map(token => token.symbol || 'Unknown').join(' → ')}`);
+        this.logger.info(`  Pools (${mixedRoute.pools.length}):`);
+        
+        mixedRoute.pools.forEach((pool, poolIndex) => {
+          this.logger.info(`    Pool ${poolIndex + 1}:`);
+          if (pool instanceof V4Pool) {
+            this.logger.info(`      Type: V4`);
+            const token0Address = pool.token0.isToken ? pool.token0.address : pool.token0.name;
+            const token1Address = pool.token1.isToken ? pool.token1.address : pool.token1.name;
+            this.logger.info(`      Token0: ${pool.token0.symbol || 'Unknown'} (${token0Address})`);
+            this.logger.info(`      Token1: ${pool.token1.symbol || 'Unknown'} (${token1Address})`);
+            this.logger.info(`      Fee: ${pool.fee / 10000}%`);
+            this.logger.info(`      Tick Spacing: ${pool.tickSpacing}`);
+            this.logger.info(`      Hooks: ${pool.hooks}`);
+          } else if (pool instanceof V3Pool) {
+            this.logger.info(`      Type: V3`);
+            this.logger.info(`      Token0: ${pool.token0.symbol} (${pool.token0.address})`);
+            this.logger.info(`      Token1: ${pool.token1.symbol} (${pool.token1.address})`);
+            this.logger.info(`      Fee: ${pool.fee / 10000}%`);
+          } else if (pool instanceof Pair) {
+            this.logger.info(`      Type: V2`);
+            this.logger.info(`      Token0: ${pool.token0.symbol} (${pool.token0.address})`);
+            this.logger.info(`      Token1: ${pool.token1.symbol} (${pool.token1.address})`);
+          }
+        });
+      }
+    });
+
+    this.logger.info(`\n=== Summary ===`);
     this.logger.info(`${routeAmountsToString(routeAmounts)}`);
 
     this.logger.info(`\tRaw Quote Exact In:`);
@@ -419,8 +535,9 @@ export abstract class BaseCommand extends Command {
       simulationStatus: simulationStatus,
     });
 
+    // Keep the existing V3 ticks calculation
     const v3Routes: V3RouteWithValidQuote[] =
-      routeAmounts as V3RouteWithValidQuote[];
+      routeAmounts.filter(route => route.protocol === Protocol.V3) as V3RouteWithValidQuote[];
     let total = BigNumber.from(0);
     for (let i = 0; i < v3Routes.length; i++) {
       const route = v3Routes[i]!;
@@ -429,6 +546,8 @@ export abstract class BaseCommand extends Command {
       );
       total = total.add(tick);
     }
-    this.logger.info(`Total ticks crossed: ${total}`);
+    if (v3Routes.length > 0) {
+      this.logger.info(`Total V3 ticks crossed: ${total}`);
+    }
   }
 }
